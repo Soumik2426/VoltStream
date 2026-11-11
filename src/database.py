@@ -3,6 +3,7 @@ import os
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 load_dotenv()
 
@@ -15,6 +16,13 @@ DATABASE_URL = URL.create(
     database=os.getenv("DB_NAME")
 )
 
+
+# Base class for all database models
+class Base(DeclarativeBase):
+    pass
+
+
+# Database engine
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
@@ -22,12 +30,18 @@ engine = create_engine(
 )
 
 
+# Session factory
+SessionLocal = sessionmaker(
+    bind=engine,
+    autoflush=False,
+    expire_on_commit=False
+)
+
+
 def test_connection():
     try:
         with engine.connect() as connection:
-            result = connection.execute(
-                text("SELECT version()")
-            )
+            result = connection.execute(text("SELECT version()"))
 
             print("Database connected successfully!")
             print(result.scalar())
