@@ -1,26 +1,24 @@
-from sqlalchemy.exc import SQLAlchemyError
-from src.storage.session_storage import rebuild_charging_session
-from src.ingestion.csv_reader import read_csv_file
+import hashlib
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
-import hashlib
 
 from sqlalchemy.orm import Session
 
-from src.models import (
-    PipelineRun,
-    BatchFile,
-    Station
-)
-
+from src.database import SessionLocal
+from src.models import PipelineRun, BatchFile, Station
 from src.pipeline_processor import process_record
+from src.ingestion.csv_reader import read_csv_file
 from src.storage.event_storage import (
     store_charging_event,
     store_rejected_record
 )
+from src.storage.session_storage import rebuild_charging_session
+from src.monitoring.logger import get_logger
 
-from src.database import SessionLocal
+
+logger = get_logger(__name__)
 
 
 def create_pipeline_run(
@@ -62,8 +60,13 @@ def create_pipeline_run(
 
     db_session.flush()
 
-    return pipeline_run, batch_file
+    logger.info(
+        "Pipeline tracking records created | run_id=%s | file=%s",
+        run_id,
+        source_file
+    )
 
+    return pipeline_run, batch_file
 
 
 def calculate_file_checksum(file_path: str) -> str:
@@ -75,7 +78,6 @@ def calculate_file_checksum(file_path: str) -> str:
             sha256.update(chunk)
 
     return sha256.hexdigest()
-
 
 
 def find_previously_processed_file(
@@ -99,8 +101,6 @@ def find_previously_processed_file(
     return existing_file
 
 
-
-
 def register_batch_file(
     db_session: Session,
     file_path: str
@@ -109,7 +109,9 @@ def register_batch_file(
     path = Path(file_path)
 
     if not path.is_file():
-        raise FileNotFoundError(f"Input file not found: {file_path}")
+        raise FileNotFoundError(
+            f"Input file not found: {file_path}"
+        )
 
     checksum = calculate_file_checksum(str(path))
 
@@ -119,6 +121,12 @@ def register_batch_file(
     )
 
     if existing_file is not None:
+        logger.warning(
+            "Duplicate file detected | existing_batch_id=%s | file=%s",
+            existing_file.batch_file_id,
+            path.name
+        )
+
         return None, existing_file, True
 
     pipeline_run, batch_file = create_pipeline_run(
@@ -131,8 +139,6 @@ def register_batch_file(
     db_session.flush()
 
     return pipeline_run, batch_file, False
-
-
 
 
 def process_csv_file(
@@ -159,12 +165,26 @@ def process_csv_file(
                 "batch_file_id": batch_file.batch_file_id
             }
 
+        run_id = pipeline_run.run_id
+        start_time = pipeline_run.started_at
+
+        logger.info(
+            "Pipeline started | run_id=%s | file=%s",
+            run_id,
+            file_path
+        )
+
         input_count = 0
         accepted_count = 0
         rejected_count = 0
         duplicate_count = 0
 
         affected_session_ids = set()
+
+        logger.info(
+            "CSV processing started | run_id=%s",
+            run_id
+        )
 
         # Step 2: Process CSV records.
         for record in read_csv_file(file_path):
@@ -177,13 +197,15 @@ def process_csv_file(
 
                 event_data = {
                     **result["event"],
-                    "run_id": pipeline_run.run_id
+                    "run_id": run_id
                 }
 
                 store_charging_event(db_session, event_data)
                 db_session.flush()
 
-                affected_session_ids.add(event_data["session_id"])
+                affected_session_ids.add(
+                    event_data["session_id"]
+                )
 
                 accepted_count += 1
 
@@ -194,7 +216,7 @@ def process_csv_file(
                     source_record=record,
                     source_file=record["_source_file"],
                     source_row_number=record["_source_row_number"],
-                    run_id=pipeline_run.run_id,
+                    run_id=run_id,
                     errors=result["errors"]
                 )
 
@@ -204,19 +226,28 @@ def process_csv_file(
 
                 duplicate_count += 1
 
-        # Step 3: Determine final file status.
+        # Step 3: Reconstruct affected charging sessions.
+        logger.info(
+            "Reconstructing charging sessions | run_id=%s | session_count=%s",
+            run_id,
+            len(affected_session_ids)
+        )
+
         for session_id in sorted(affected_session_ids):
+
             rebuild_charging_session(
                 db_session=db_session,
                 session_id=session_id,
-                run_id=pipeline_run.run_id
+                run_id=run_id
             )
+
+        # Step 4: Determine final file status.
         if rejected_count > 0 or duplicate_count > 0:
             final_file_status = "PARTIAL_SUCCESS"
         else:
             final_file_status = "SUCCESS"
 
-        # Step 4: Update pipeline metrics.
+        # Step 5: Update pipeline metrics.
         pipeline_run.input_count = input_count
         pipeline_run.accepted_count = accepted_count
         pipeline_run.rejected_count = rejected_count
@@ -224,7 +255,7 @@ def process_csv_file(
         pipeline_run.status = "SUCCESS"
         pipeline_run.completed_at = datetime.now(timezone.utc)
 
-        # Step 5: Update batch metrics.
+        # Step 6: Update batch metrics.
         batch_file.input_count = input_count
         batch_file.accepted_count = accepted_count
         batch_file.rejected_count = rejected_count
@@ -232,11 +263,33 @@ def process_csv_file(
         batch_file.file_status = final_file_status
         batch_file.completed_at = datetime.now(timezone.utc)
 
-        # Step 6: Commit successful processing.
+        # Calculate processing duration.
+        duration = round(
+            (pipeline_run.completed_at - start_time).total_seconds(),
+            3
+        )
+
+        # Step 7: Commit successful processing.
         db_session.commit()
 
+        logger.info(
+            "Records processed | run_id=%s | input=%s | accepted=%s | rejected=%s | duplicates=%s",
+            run_id,
+            input_count,
+            accepted_count,
+            rejected_count,
+            duplicate_count
+        )
+
+        logger.info(
+            "Pipeline completed | run_id=%s | status=%s | duration_seconds=%s",
+            run_id,
+            final_file_status,
+            duration
+        )
+
         return {
-            "run_id": pipeline_run.run_id,
+            "run_id": run_id,
             "batch_file_id": batch_file.batch_file_id,
             "status": final_file_status,
             "input_count": input_count,
@@ -249,9 +302,30 @@ def process_csv_file(
 
         # Capture tracking information before rollback.
         run_id = pipeline_run.run_id if pipeline_run else None
-        source_file = batch_file.source_file if batch_file else Path(file_path).name
-        checksum = batch_file.file_checksum if batch_file else None
-        batch_id = batch_file.batch_file_id if batch_file else None
+
+        source_file = (
+            batch_file.source_file
+            if batch_file
+            else Path(file_path).name
+        )
+
+        checksum = (
+            batch_file.file_checksum
+            if batch_file
+            else None
+        )
+
+        batch_id = (
+            batch_file.batch_file_id
+            if batch_file
+            else None
+        )
+
+        logger.exception(
+            "Pipeline processing failed | run_id=%s | file=%s",
+            run_id or "NOT_CREATED",
+            source_file
+        )
 
         # Roll back all uncommitted processing operations.
         db_session.rollback()
@@ -260,10 +334,12 @@ def process_csv_file(
 
             # Recreate failed-run tracking in a new transaction.
             try:
+                failed_at = datetime.now(timezone.utc)
+
                 failed_run = PipelineRun(
                     run_id=run_id,
-                    started_at=datetime.now(timezone.utc),
-                    completed_at=datetime.now(timezone.utc),
+                    started_at=failed_at,
+                    completed_at=failed_at,
                     input_count=0,
                     accepted_count=0,
                     rejected_count=0,
@@ -285,21 +361,25 @@ def process_csv_file(
                     accepted_count=0,
                     rejected_count=0,
                     duplicate_count=0,
-                    started_at=datetime.now(timezone.utc),
-                    completed_at=datetime.now(timezone.utc),
+                    started_at=failed_at,
+                    completed_at=failed_at,
                     error_message=str(error)[:1000]
                 )
 
                 db_session.add(failed_batch)
                 db_session.commit()
 
+                logger.error(
+                    "Failed pipeline execution tracked | run_id=%s",
+                    run_id
+                )
+
             except Exception:
                 db_session.rollback()
+                logger.exception(
+                    "Could not persist failed pipeline tracking | run_id=%s",
+                    run_id
+                )
                 raise
 
         raise
-
-
-
-
-
