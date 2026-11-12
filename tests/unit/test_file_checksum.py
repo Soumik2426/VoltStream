@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from src.pipeline import calculate_file_checksum
 
 

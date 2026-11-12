@@ -1,12 +1,10 @@
 import logging
-import os
 from pathlib import Path
 
 
 def get_logger(name: str) -> logging.Logger:
     """
     Create or retrieve a configured application logger.
-
     Logs are written to:
     - Console
     - logs/voltstream.log

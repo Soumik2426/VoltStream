@@ -1,4 +1,3 @@
-
 from sqlalchemy.orm import configure_mappers
 
 from src.models import (

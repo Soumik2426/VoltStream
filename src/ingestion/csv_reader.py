@@ -1,4 +1,3 @@
-
 import csv
 from pathlib import Path
 from typing import Iterator
@@ -17,9 +16,7 @@ REQUIRED_COLUMNS = {
 def read_csv_file(file_path: str) -> Iterator[dict]:
     """
     Read charging events from a CSV file.
-
-    Returns one dictionary per data row, along with
-    source filename and source row number.
+    Returns one dictionary per data row, along with source filename and source row number.
     """
 
     path = Path(file_path)

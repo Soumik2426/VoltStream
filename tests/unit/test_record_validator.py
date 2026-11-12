@@ -1,4 +1,3 @@
-
 import pytest
 
 from src.validation.record_validator import validate_record

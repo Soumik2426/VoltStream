@@ -1,4 +1,3 @@
-
 from datetime import datetime, timezone
 import src.pipeline as pipeline_module
 import csv

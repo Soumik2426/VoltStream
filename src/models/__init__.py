@@ -1,4 +1,3 @@
-
 from src.models.station import Station
 from src.models.pipeline_run import PipelineRun
 from src.models.charging_event import ChargingEvent

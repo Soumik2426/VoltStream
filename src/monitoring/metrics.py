@@ -8,7 +8,6 @@ from src.models.charging_session import ChargingSession
 def calculate_percentage(count: int, total: int) -> float:
     """
     Calculate the percentage of a particular record category.
-
     Returns 0.0 when there are no input records.
     """
     if total == 0:
