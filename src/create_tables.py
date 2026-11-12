@@ -1,15 +1,15 @@
 from src.database import Base, engine
+
+# Import all models to register their tables
+# with SQLAlchemy metadata.
 from src.models import (
     Station,
     PipelineRun,
     ChargingEvent,
     ChargingSession,
     RejectedRecord,
-    batch_file
+    BatchFile
 )
-
-# Import models to register their tables with SQLAlchemy metadata.
-from src.models import Station, PipelineRun
 
 
 def create_tables():

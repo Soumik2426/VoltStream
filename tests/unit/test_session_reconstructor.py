@@ -204,3 +204,41 @@ def test_late_arriving_event_before_stop_is_not_anomalous():
     assert result["energy_consumed_kwh"] == 25
     assert result["duration_seconds"] == 1800
     assert result["anomaly_reasons"] == []
+
+
+
+def test_multiple_start_events_do_not_trigger_meter_reading_before_start():
+    from types import SimpleNamespace
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from src.transformation.session_reconstructor import reconstruct_session
+
+    events = [
+        SimpleNamespace(
+            event_id="EVT001",
+            event_type="START",
+            event_timestamp=datetime(2026, 11, 4, 0, 2, tzinfo=timezone.utc),
+            meter_kwh=Decimal("0"),
+            station_id="ST001"
+        ),
+        SimpleNamespace(
+            event_id="EVT002",
+            event_type="START",
+            event_timestamp=datetime(2026, 11, 4, 0, 38, tzinfo=timezone.utc),
+            meter_kwh=Decimal("12.677"),
+            station_id="ST001"
+        ),
+        SimpleNamespace(
+            event_id="EVT003",
+            event_type="STOP",
+            event_timestamp=datetime(2026, 11, 4, 1, 14, tzinfo=timezone.utc),
+            meter_kwh=Decimal("18.264"),
+            station_id="ST001"
+        )
+    ]
+
+    result = reconstruct_session(events)
+
+    assert result["session_status"] == "ANOMALOUS"
+    assert result["anomaly_reasons"] == ["MULTIPLE_START_EVENTS"]

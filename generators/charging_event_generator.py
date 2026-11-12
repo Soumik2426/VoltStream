@@ -1,3 +1,4 @@
+
 import argparse
 import csv
 import random
@@ -24,6 +25,7 @@ CSV_COLUMNS = [
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_DIRECTORY = PROJECT_ROOT / "data" / "generated"
 
+
 # Data-quality issue categories.
 INVALID_ISSUES = [
     "INVALID_TIMESTAMP",
@@ -39,6 +41,7 @@ ANOMALY_ISSUES = [
     "MULTIPLE_START_EVENTS",
     "MULTIPLE_STOP_EVENTS"
 ]
+
 
 # Illustrative distribution. These percentages are configurable.
 DEFAULT_DISTRIBUTION = {
@@ -71,13 +74,16 @@ def get_registered_stations():
         db_session.close()
 
 
-def generate_charging_session(station, session_number, rng):
+def generate_charging_session(station, session_number, rng, seed):
     """
-    Generate one complete session:
-    START -> METER_READING -> STOP
+    Generate one complete charging session:
+    START -> METER_READING -> STOP.
+
+    Seed-based IDs ensure that different generated datasets
+    do not reuse previously generated session/event IDs.
     """
 
-    session_id = f"SES_GEN_{session_number:08d}"
+    session_id = f"SES_GEN_S{seed}_{session_number:08d}"
 
     start_time = datetime(
         2026, 11, 1, 8, 0,
@@ -111,7 +117,7 @@ def generate_charging_session(station, session_number, rng):
 
     return [
         {
-            "event_id": f"EVT_GEN_{session_number:08d}_01",
+            "event_id": f"EVT_GEN_S{seed}_{session_number:08d}_01",
             "session_id": session_id,
             "station_id": station["station_id"],
             "event_type": "START",
@@ -119,7 +125,7 @@ def generate_charging_session(station, session_number, rng):
             "meter_kwh": "0.000"
         },
         {
-            "event_id": f"EVT_GEN_{session_number:08d}_02",
+            "event_id": f"EVT_GEN_S{seed}_{session_number:08d}_02",
             "session_id": session_id,
             "station_id": station["station_id"],
             "event_type": "METER_READING",
@@ -127,7 +133,7 @@ def generate_charging_session(station, session_number, rng):
             "meter_kwh": f"{intermediate_energy:.3f}"
         },
         {
-            "event_id": f"EVT_GEN_{session_number:08d}_03",
+            "event_id": f"EVT_GEN_S{seed}_{session_number:08d}_03",
             "session_id": session_id,
             "station_id": station["station_id"],
             "event_type": "STOP",
@@ -169,7 +175,7 @@ def inject_data_quality_issue(events, issue_type, rng):
         corrupted_events[1]["meter_kwh"] = "9999.999"
 
     elif issue_type == "STOP_WITHOUT_START":
-        # Remove the START event while retaining a STOP.
+        # Replace START with METER_READING.
         corrupted_events[0]["event_type"] = "METER_READING"
 
     elif issue_type == "MULTIPLE_START_EVENTS":
@@ -197,6 +203,8 @@ def generate_records(
 
     The requested count is rounded down to a multiple of 3
     because each base session contains three events.
+
+    Duplicate scenarios add one additional event.
     """
 
     if record_count < 3:
@@ -204,7 +212,11 @@ def generate_records(
 
     rng = random.Random(seed)
 
-    distribution = distribution or DEFAULT_DISTRIBUTION
+    distribution = (
+        DEFAULT_DISTRIBUTION.copy()
+        if distribution is None
+        else distribution.copy()
+    )
 
     if set(distribution) != {
         "valid", "invalid", "anomalous", "duplicate"
@@ -212,13 +224,19 @@ def generate_records(
         raise ValueError("Invalid distribution categories.")
 
     if any(
-        not isinstance(value, (int, float)) or value < 0
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or value < 0
         for value in distribution.values()
     ):
-        raise ValueError("Distribution values must be non-negative.")
+        raise ValueError(
+            "Distribution values must be non-negative."
+        )
 
     if abs(sum(distribution.values()) - 100) > 0.0001:
-        raise ValueError("Distribution percentages must total 100.")
+        raise ValueError(
+            "Distribution percentages must total 100."
+        )
 
     stations = get_registered_stations()
 
@@ -261,6 +279,7 @@ def generate_records(
     rng.shuffle(categories)
 
     records = []
+
     category_counts = {
         "valid": 0,
         "invalid": 0,
@@ -268,14 +287,18 @@ def generate_records(
         "duplicate": 0
     }
 
-    for session_number, category in enumerate(categories, start=1):
+    for session_number, category in enumerate(
+        categories,
+        start=1
+    ):
 
         station = rng.choice(stations)
 
         events = generate_charging_session(
             station,
             session_number,
-            rng
+            rng,
+            seed
         )
 
         category_counts[category] += 1
@@ -305,6 +328,7 @@ def generate_records(
 
         records.extend(events)
 
+    # Shuffle records to simulate out-of-order event arrival.
     rng.shuffle(records)
 
     return records, category_counts, actual_record_count
@@ -375,6 +399,7 @@ def main():
 
     print("\n========== VOLTSTREAM DATA GENERATOR ==========")
     print(f"Requested records: {args.records}")
+    print(f"Base records before duplicate injection: {actual_count}")
     print(f"Generated records: {len(records)}")
     print(f"Output file: {output_file}")
     print(f"Random seed: {args.seed}")

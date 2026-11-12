@@ -1,13 +1,4 @@
-
 def reconstruct_session(events: list) -> dict:
-    """
-    Reconstruct a charging session from its events.
-
-    Events are processed chronologically.
-    A session can be COMPLETED without intermediate meter readings.
-    Energy consumption is calculated using START and STOP readings.
-    Anomalies are detected and returned as reason codes.
-    """
 
     if not events:
         raise ValueError("Cannot reconstruct an empty session")
@@ -23,10 +14,8 @@ def reconstruct_session(events: list) -> dict:
 
     start_event = None
     stop_event = None
-
     previous_meter = None
     latest_meter = None
-
     anomaly_reasons = set()
 
     # All events in one session should belong to the same station.
@@ -52,14 +41,15 @@ def reconstruct_session(events: list) -> dict:
             else:
                 start_event = event
 
-            if previous_meter is not None:
-                anomaly_reasons.add("METER_READING_BEFORE_START")
-
+            # A START event initializes the meter baseline.
+            # It must not trigger METER_READING_BEFORE_START.
             previous_meter = event.meter_kwh
             latest_meter = event.meter_kwh
 
         elif event.event_type == "METER_READING":
 
+            # Only an actual meter-reading event before START
+            # should trigger this anomaly.
             if start_event is None:
                 anomaly_reasons.add("METER_READING_BEFORE_START")
 
@@ -120,7 +110,11 @@ def reconstruct_session(events: list) -> dict:
     duration_seconds = None
 
     # Calculate duration whenever both START and STOP exist.
-    if start_time is not None and end_time is not None:
+    if (
+            start_time is not None
+            and end_time is not None
+            and end_time >= start_time
+    ):
         duration_seconds = int(
             (end_time - start_time).total_seconds()
         )

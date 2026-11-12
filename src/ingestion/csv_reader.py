@@ -1,3 +1,4 @@
+
 import csv
 from pathlib import Path
 from typing import Iterator
@@ -40,12 +41,17 @@ def read_csv_file(file_path: str) -> Iterator[dict]:
         if not reader.fieldnames:
             raise ValueError("CSV file is empty or has no header")
 
-        headers = reader.fieldnames
+        # Normalize column names by removing surrounding whitespace.
+        headers = [
+            header.strip() if header else header
+            for header in reader.fieldnames
+        ]
 
+        # Check for duplicate column names after normalization.
         if len(headers) != len(set(headers)):
             raise ValueError("CSV contains duplicate column names")
 
-        if any(not header or not header.strip() for header in headers):
+        if any(not header for header in headers):
             raise ValueError("CSV contains a blank column name")
 
         missing_columns = REQUIRED_COLUMNS - set(headers)
@@ -54,6 +60,9 @@ def read_csv_file(file_path: str) -> Iterator[dict]:
             raise ValueError(
                 f"Missing required columns: {sorted(missing_columns)}"
             )
+
+        # Use normalized headers for subsequent row processing.
+        reader.fieldnames = headers
 
         for row_number, row in enumerate(reader, start=2):
 

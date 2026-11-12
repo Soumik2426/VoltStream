@@ -1,12 +1,10 @@
 import hashlib
-import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from src.database import SessionLocal
 from src.models import PipelineRun, BatchFile, Station
 from src.pipeline_processor import process_record
 from src.ingestion.csv_reader import read_csv_file

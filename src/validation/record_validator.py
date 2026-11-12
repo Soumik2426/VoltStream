@@ -1,3 +1,4 @@
+
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
@@ -16,6 +17,13 @@ REQUIRED_FIELDS = [
     "event_timestamp",
     "meter_kwh"
 ]
+
+# Maximum lengths based on the database model definitions.
+MAX_FIELD_LENGTHS = {
+    "event_id": 50,
+    "session_id": 50,
+    "station_id": 20
+}
 
 
 def validate_record(record: dict) -> list[dict]:
@@ -40,63 +48,128 @@ def validate_record(record: dict) -> list[dict]:
             })
 
     # Do not perform further checks on missing values.
-    if errors and any(
+    if any(
         error["reason_code"] == "MISSING_REQUIRED_FIELD"
         for error in errors
     ):
         return errors
 
-    # 3. Validate event ID.
-    if not isinstance(record["event_id"], str):
-        errors.append({
-            "reason_code": "INVALID_EVENT_ID",
-            "reason_detail": "Event ID must be a string."
-        })
+    # 3. Validate identifiers.
+    for field, max_length in MAX_FIELD_LENGTHS.items():
+
+        value = record[field]
+
+        if not isinstance(value, str):
+            errors.append({
+                "reason_code": f"INVALID_{field.upper()}",
+                "reason_detail": f"{field} must be a string."
+            })
+            continue
+
+        if len(value.strip()) > max_length:
+            errors.append({
+                "reason_code": f"INVALID_{field.upper()}",
+                "reason_detail": (
+                    f"{field} cannot exceed {max_length} characters."
+                )
+            })
 
     # 4. Validate event type.
-    event_type = record["event_type"].strip().upper()
-
-    if event_type not in VALID_EVENT_TYPES:
+    if not isinstance(record["event_type"], str):
         errors.append({
             "reason_code": "INVALID_EVENT_TYPE",
-            "reason_detail": f"Unsupported event type: {record['event_type']}"
+            "reason_detail": "Event type must be a string."
         })
+    else:
+        event_type = record["event_type"].strip().upper()
+
+        if event_type not in VALID_EVENT_TYPES:
+            errors.append({
+                "reason_code": "INVALID_EVENT_TYPE",
+                "reason_detail": (
+                    f"Unsupported event type: {record['event_type']}"
+                )
+            })
 
     # 5. Validate timestamp.
-    try:
-        timestamp = datetime.fromisoformat(
-            record["event_timestamp"].strip().replace("Z", "+00:00")
-        )
-
-        if timestamp.tzinfo is None:
-            errors.append({
-                "reason_code": "TIMEZONE_MISSING",
-                "reason_detail": "Event timestamp must include a timezone."
-            })
-
-    except (ValueError, AttributeError):
+    if not isinstance(record["event_timestamp"], str):
         errors.append({
             "reason_code": "INVALID_TIMESTAMP",
-            "reason_detail": "Event timestamp is not a valid ISO 8601 timestamp."
+            "reason_detail": (
+                "Event timestamp must be a valid ISO 8601 string."
+            )
         })
+    else:
+        try:
+            timestamp = datetime.fromisoformat(
+                record["event_timestamp"].strip().replace(
+                    "Z", "+00:00"
+                )
+            )
 
-    # 6. Validate meter reading.
-    try:
-        meter_value = Decimal(record["meter_kwh"].strip())
+            if timestamp.tzinfo is None:
+                errors.append({
+                    "reason_code": "TIMEZONE_MISSING",
+                    "reason_detail": (
+                        "Event timestamp must include a timezone."
+                    )
+                })
 
-        if not meter_value.is_finite():
-            raise InvalidOperation
-
-        if meter_value < 0:
+        except ValueError:
             errors.append({
-                "reason_code": "NEGATIVE_METER_READING",
-                "reason_detail": "Meter reading cannot be negative."
+                "reason_code": "INVALID_TIMESTAMP",
+                "reason_detail": (
+                    "Event timestamp is not a valid ISO 8601 timestamp."
+                )
             })
 
-    except (InvalidOperation, ValueError, AttributeError):
+    # 6. Validate meter reading.
+    if not isinstance(record["meter_kwh"], str):
         errors.append({
             "reason_code": "INVALID_METER_READING",
-            "reason_detail": "Meter reading must be a valid finite number."
+            "reason_detail": (
+                "Meter reading must be a valid finite number."
+            )
         })
+    else:
+        try:
+            meter_value = Decimal(record["meter_kwh"].strip())
+
+            if not meter_value.is_finite():
+                raise InvalidOperation
+
+            if meter_value < 0:
+                errors.append({
+                    "reason_code": "NEGATIVE_METER_READING",
+                    "reason_detail": "Meter reading cannot be negative."
+                })
+
+            # Database column: NUMERIC(12,3)
+            # Maximum 12 total digits, including 3 decimal places.
+            if meter_value.as_tuple().exponent < -3:
+                errors.append({
+                    "reason_code": "INVALID_METER_PRECISION",
+                    "reason_detail": (
+                        "Meter reading cannot have more than "
+                        "3 decimal places."
+                    )
+                })
+
+            if meter_value != 0 and meter_value.adjusted() >= 9:
+                errors.append({
+                    "reason_code": "INVALID_METER_PRECISION",
+                    "reason_detail": (
+                        "Meter reading exceeds the maximum precision "
+                        "of NUMERIC(12,3)."
+                    )
+                })
+
+        except (InvalidOperation, ValueError):
+            errors.append({
+                "reason_code": "INVALID_METER_READING",
+                "reason_detail": (
+                    "Meter reading must be a valid finite number."
+                )
+            })
 
     return errors
